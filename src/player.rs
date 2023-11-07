@@ -22,13 +22,14 @@ pub struct PlayerBundle {
 impl PlayerBundle {
     pub fn new(image: Handle<Image>) -> Self {
         let sprite = SpriteBundle {
+            transform: Transform::from_scale(Vec3::splat(0.001)),
             texture: image,
             ..Default::default()
         };
 
         let damping = Damping {
-            linear_damping: 1.0,
-            angular_damping: 1.0,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
         };
 
         Self {
@@ -40,7 +41,7 @@ impl PlayerBundle {
             force: ExternalImpulse::default(),
             locked_axes: LockedAxes::empty(),
             damping,
-            collider: Collider::ball(45.0),
+            collider: Collider::ball(300.0),
             velocity: Velocity::default(),
             mass: ColliderMassProperties::Density(1.0),
         }

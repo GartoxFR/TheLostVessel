@@ -1,67 +1,70 @@
 mod paralax;
+mod particles;
 mod player;
 
 use bevy::prelude::*;
-use bevy::render::settings::{WgpuFeatures, WgpuSettings};
-use bevy::render::RenderPlugin;
+use bevy::render::camera::ScalingMode;
+use bevy::sprite::MaterialMesh2dBundle;
+use bevy::transform::TransformSystem;
 use bevy::window::WindowResolution;
-use bevy_hanabi::prelude::*;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_rapier2d::prelude::*;
+use bevy_scene_hook::*;
 
 use self::paralax::{paralax_movement, ParalaxBackground, ParalaxTarget};
+use self::particles::ParticlePlugin;
 use self::player::{PlayerBundle, PlayerTag};
 
 #[derive(Component)]
-struct LeftRCS;
-
-#[derive(Component)]
-struct RightRCS;
+struct NeedCollider;
 
 fn main() {
-    let mut wgpu_settings = WgpuSettings::default();
-    wgpu_settings
-        .features
-        .set(WgpuFeatures::VERTEX_WRITABLE_STORAGE, true);
     App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        resolution: WindowResolution::new(1280.0, 720.0),
-                        resizable: false,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                })
-                .set(RenderPlugin { wgpu_settings }),
-        )
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                resolution: WindowResolution::new(1280.0, 720.0),
+                resizable: false,
+                // present_mode: PresentMode::Immediate,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
         .register_type::<ParalaxBackground>()
-        .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
+        .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(1.0))
         .add_plugins(WorldInspectorPlugin::default())
-        .add_plugins(RapierDebugRenderPlugin::default())
-        .add_plugins(HanabiPlugin)
+        // .add_plugins(RapierDebugRenderPlugin::default())
+        .add_plugins(ParticlePlugin)
+        .add_plugins(HookPlugin)
         .insert_resource(RapierConfiguration {
             gravity: Vec2::ZERO,
             ..Default::default()
         })
         .add_systems(Startup, setup)
+        .add_systems(Update, player_movement)
         .add_systems(
-            Update,
-            (player_movement, rcs_particles).chain(),
+            PostUpdate,
+            paralax_movement
+                .after(PhysicsSet::Writeback)
+                .before(TransformSystem::TransformPropagate),
         )
-        .add_systems(PostUpdate, paralax_movement.after(bevy::transform::TransformSystem::TransformPropagate))
         .run();
 }
 
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut effects: ResMut<Assets<EffectAsset>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
+    let quad = meshes.add(shape::Quad::new(Vec2::splat(1.0)).into());
+    let quad_collider = Collider::cuboid(0.5, 0.5);
+    let wall_rigidbody = RigidBody::Fixed;
+    let wall_material = materials.add(ColorMaterial::from(Color::rgb(0.9, 0.9, 0.9)));
     let image = asset_server.load("background.png");
     commands
-        .spawn(SpatialBundle::default())
+        .spawn(SpatialBundle::from_transform(Transform::from_scale(
+            Vec3::splat(0.01),
+        )))
         .with_children(|background| {
             for (i, j) in [(-1.0, -1.0), (-1.0, 1.0), (1.0, -1.0), (1.0, 1.0)] {
                 background.spawn(SpriteBundle {
@@ -75,100 +78,140 @@ fn setup(
             paralax_factor: 0.95,
         })
         .insert(Name::new("Background"));
+
     commands
-        .spawn(Camera2dBundle::default())
+        .spawn(Camera2dBundle {
+            projection: OrthographicProjection {
+                scaling_mode: ScalingMode::WindowSize(100.0),
+                near: 10000.0,
+                far: -10000.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
         .insert(ParalaxBackground {
             paralax_factor: 1.0,
         });
 
     commands
-        .spawn(TransformBundle::from_transform(Transform::from_xyz(
-            -300.0, 0.0, 0.0,
-        )))
-        .insert(Collider::segment(
-            Vec2::new(0.0, -1000.0),
-            Vec2::new(0.0, 1000.0),
-        ));
-
-    let particle_texture = asset_server.load("cloud.png");
-    let spawner = Spawner::rate(400.0.into());
-    let mut gradient = Gradient::default();
-    gradient.add_key(0.0, Vec4::splat(1.));
-    gradient.add_key(1.0, Vec4::splat(0.0));
-
-    let writer = ExprWriter::new();
-    let age = writer.lit(0.0).expr();
-    let init_age = SetAttributeModifier::new(Attribute::AGE, age);
-
-    let lifetime = writer.lit(0.2).expr();
-    let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
-
-    let init_pos = SetPositionCircleModifier {
-        center: writer.lit(Vec3::ZERO).expr(),
-        axis: writer.lit(Vec3::Z).expr(),
-        radius: writer.lit(10.0).expr(),
-        dimension: ShapeDimension::Volume,
-    };
-
-    let drag = writer.lit(2.).expr();
-    let update_drag = LinearDragModifier::new(drag);
-
-    let direction = writer.prop("direction");
-    let parent_velocity = writer.prop("parent_velocity");
-    let ortho = writer.lit(Vec3::Z).cross(direction.clone());
-    let spread = writer.rand(ScalarType::Float) * writer.lit(2.) - writer.lit(1.);
-    let speed = writer.lit(200.0);
-    let velocity =
-        parent_velocity + (direction + ortho * spread * writer.lit(0.7)).normalized() * speed;
-    let init_vel = SetAttributeModifier::new(Attribute::VELOCITY, (velocity).expr());
-    let effect = effects.add(
-        EffectAsset::new(32768, spawner, writer.finish())
-            .with_name("rcs_gas")
-            .with_property("parent_velocity", Vec3::ZERO.into())
-            .with_property("direction", Vec3::ZERO.into())
-            .init(init_pos)
-            .init(init_vel)
-            .init(init_age)
-            .init(init_lifetime)
-            .update(update_drag)
-            .render(ParticleTextureModifier {
-                texture: particle_texture,
-            })
-            .render(SetSizeModifier {
-                size: Vec2::splat(15.0).into(),
-                screen_space_size: true,
-            })
-            .render(ColorOverLifetimeModifier { gradient }),
-    );
+        .spawn(MaterialMesh2dBundle {
+            transform: Transform {
+                translation: Vec3 {
+                    x: 0.0,
+                    y: 50.0,
+                    z: 0.0,
+                },
+                scale: Vec3 {
+                    x: 102.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+                ..Default::default()
+            },
+            mesh: quad.clone().into(),
+            material: wall_material.clone(),
+            ..Default::default()
+        })
+        .insert((quad_collider.clone(), wall_rigidbody));
 
     commands
+        .spawn(MaterialMesh2dBundle {
+            transform: Transform {
+                translation: Vec3 {
+                    x: 0.0,
+                    y: -50.0,
+                    z: 0.0,
+                },
+                scale: Vec3 {
+                    x: 102.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+                ..Default::default()
+            },
+            mesh: quad.clone().into(),
+            material: wall_material.clone(),
+            ..Default::default()
+        })
+        .insert((quad_collider.clone(), wall_rigidbody));
+
+    commands
+        .spawn(MaterialMesh2dBundle {
+            transform: Transform {
+                translation: Vec3 {
+                    x: 50.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                scale: Vec3 {
+                    x: 1.0,
+                    y: 102.0,
+                    z: 1.0,
+                },
+                ..Default::default()
+            },
+            mesh: quad.clone().into(),
+            material: wall_material.clone(),
+            ..Default::default()
+        })
+        .insert((quad_collider.clone(), wall_rigidbody));
+
+    commands
+        .spawn(MaterialMesh2dBundle {
+            transform: Transform {
+                translation: Vec3 {
+                    x: -50.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                scale: Vec3 {
+                    x: 1.0,
+                    y: 102.0,
+                    z: 1.0,
+                },
+                ..Default::default()
+            },
+            mesh: quad.clone().into(),
+            material: wall_material.clone(),
+            ..Default::default()
+        })
+        .insert((quad_collider.clone(), wall_rigidbody));
+
+    commands
+        .spawn(MaterialMesh2dBundle {
+            transform: Transform {
+                translation: Vec3 {
+                    x: -5.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                ..Default::default()
+            },
+            mesh: quad.clone().into(),
+            material: wall_material.clone(),
+            ..Default::default()
+        })
+        .insert((quad_collider.clone(), wall_rigidbody));
+    commands
         .spawn(PlayerBundle::new(asset_server.load("player.png")))
-        .insert(ParalaxTarget)
-        .with_children(|player| {
-            player
-                .spawn(ParticleEffectBundle::new(effect.clone()).with_spawner(spawner))
-                .insert(TransformBundle::from_transform(Transform::from_xyz(
-                    -40., -30., 0.,
-                )))
-                .insert(RightRCS);
-            player
-                .spawn(ParticleEffectBundle::new(effect).with_spawner(spawner))
-                .insert(TransformBundle::from_transform(Transform::from_xyz(
-                    40., -30., 0.,
-                )))
-                .insert(LeftRCS);
-        });
+        .insert(ParalaxTarget);
 }
 
-const RCS_FORCE: f32 = 20.0;
-const RCS_TORQUE: f32 = 0.01;
+const RCS_FORCE: f32 = 0.5;
+const RCS_TORQUE: f32 = 0.03;
 
 fn player_movement(
+    time: Res<Time>,
     gamepads: Res<Gamepads>,
+    buttons: Res<Input<GamepadButton>>,
     axes: Res<Axis<GamepadAxis>>,
-    mut player: Query<&mut ExternalImpulse, With<PlayerTag>>,
+    mut player: Query<(&mut ExternalImpulse, &mut Velocity), With<PlayerTag>>,
 ) {
     for gamepad in gamepads.iter().take(1) {
+        let stop_button = GamepadButton {
+            gamepad,
+            button_type: GamepadButtonType::South,
+        };
         let mut left_stick_x = axes
             .get(GamepadAxis::new(gamepad, GamepadAxisType::LeftStickX))
             .unwrap();
@@ -190,59 +233,28 @@ fn player_movement(
             right_stick_x = 0.0;
         }
 
-        let left_stick = Vec2::new(left_stick_x, left_stick_y);
-        let force = left_stick * RCS_FORCE;
-        let torque = -right_stick_x * RCS_TORQUE;
-        if let Ok(mut ball_force) = player.get_single_mut() {
-            ball_force.impulse = force;
-            ball_force.torque_impulse = torque;
+        let (mut impulse, mut current_velocity) = player.single_mut();
+
+        if buttons.pressed(stop_button) {
+            if current_velocity.linvel.length() > 0.5 {
+                impulse.impulse = -current_velocity.linvel.normalize() * RCS_FORCE * 2.0 * time.delta_seconds();
+            } else {
+                current_velocity.linvel = Vec2::splat(0.0);
+            }
+
+            if current_velocity.angvel.abs() > 0.1 {
+                impulse.torque_impulse = -current_velocity.angvel.signum() * RCS_TORQUE * 2.0 * time.delta_seconds();
+            } else {
+                current_velocity.angvel = 0.0;
+            }
+
+        } else {
+            let left_stick = Vec2::new(left_stick_x, left_stick_y);
+            let force = left_stick * RCS_FORCE;
+            let torque = -right_stick_x * RCS_TORQUE;
+
+            impulse.impulse += force * time.delta_seconds();
+            impulse.torque_impulse += torque * time.delta_seconds();
         }
     }
-}
-
-fn rcs_particles(
-    player: Query<(&Velocity, &ExternalImpulse, &GlobalTransform), With<PlayerTag>>,
-    mut right_rcs: Query<(&mut CompiledParticleEffect, &mut EffectSpawner), With<RightRCS>>,
-    mut left_rcs: Query<(&mut CompiledParticleEffect, &mut EffectSpawner), Without<RightRCS>>,
-) {
-    let Ok((velocity, impulse, transform)) = player.get_single() else {
-        return;
-    };
-
-    let Ok((mut right_effect, mut right_spawner)) = right_rcs.get_single_mut() else {
-        return;
-    };
-
-    let Ok((mut left_effect, mut left_spawner)) = left_rcs.get_single_mut() else {
-        return;
-    };
-
-    if impulse.impulse.length_squared() > 0.0 {
-        let dir = -impulse.impulse.normalize();
-        set_effect(&mut right_effect, &mut right_spawner, velocity, dir);
-        set_effect(&mut left_effect, &mut left_spawner, velocity, dir);
-    } else if impulse.torque_impulse.abs() > 0.0 {
-        let dir = if impulse.torque_impulse > 0.0 {
-            transform.up().truncate()
-        } else {
-            -transform.up().truncate()
-        };
-
-        set_effect(&mut right_effect, &mut right_spawner, velocity, dir);
-        set_effect(&mut left_effect, &mut left_spawner, velocity, -dir);
-    } else {
-        right_spawner.set_active(false);
-        left_spawner.set_active(false);
-    }
-}
-
-fn set_effect(
-    effect: &mut CompiledParticleEffect,
-    spawner: &mut EffectSpawner,
-    velocity: &Velocity,
-    dir: Vec2,
-) {
-    spawner.set_active(true);
-    effect.set_property("parent_velocity", velocity.linvel.extend(0.).into());
-    effect.set_property("direction", Vec3::new(0., dir.x, dir.y).into());
 }
