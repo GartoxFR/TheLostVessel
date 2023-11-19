@@ -4177,6 +4177,9 @@ dependencies = [
  "bevy_gltf_components",
  "bevy_hanabi",
  "bevy_rapier2d",
+ "ron",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

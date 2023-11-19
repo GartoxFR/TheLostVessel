@@ -1,22 +1,34 @@
+mod dialog;
+mod forcefield;
 mod paralax;
 mod particles;
 mod player;
+mod asset_enum;
 
+use std::f32::consts::PI;
+
+use bevy::input::gamepad::{GamepadButtonChangedEvent, GamepadEvent};
 use bevy::prelude::*;
 use bevy::render::camera::ScalingMode;
-use bevy::sprite::MaterialMesh2dBundle;
+use bevy::sprite::{Material2dPlugin, MaterialMesh2dBundle};
 use bevy::transform::TransformSystem;
 use bevy::window::WindowResolution;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_rapier2d::prelude::*;
 use bevy_scene_hook::*;
 
+use self::dialog::{CurrentDialog, DialogPlugin, Portrait, Dialog};
+use self::forcefield::{forcefield_update_time, ForceFieldMaterial};
 use self::paralax::{paralax_movement, ParalaxBackground, ParalaxTarget};
 use self::particles::ParticlePlugin;
 use self::player::{PlayerBundle, PlayerTag};
 
-#[derive(Component)]
-struct NeedCollider;
+#[derive(Debug, States, Default, Clone, Copy, Eq, PartialEq, Hash)]
+enum AppState {
+    #[default]
+    InGame,
+    InDialog,
+}
 
 fn main() {
     App::new()
@@ -32,15 +44,19 @@ fn main() {
         .register_type::<ParalaxBackground>()
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(1.0))
         .add_plugins(WorldInspectorPlugin::default())
+        .add_plugins(Material2dPlugin::<ForceFieldMaterial>::default())
         // .add_plugins(RapierDebugRenderPlugin::default())
         .add_plugins(ParticlePlugin)
         .add_plugins(HookPlugin)
+        .add_plugins(DialogPlugin)
+        .add_state::<AppState>()
         .insert_resource(RapierConfiguration {
             gravity: Vec2::ZERO,
             ..Default::default()
         })
         .add_systems(Startup, setup)
-        .add_systems(Update, player_movement)
+        .add_systems(Update, (player_movement, launch_dialog))
+        .add_systems(Update, forcefield_update_time)
         .add_systems(
             PostUpdate,
             paralax_movement
@@ -54,13 +70,17 @@ fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut forcefield_materials: ResMut<Assets<ForceFieldMaterial>>,
+    mut dialog: ResMut<CurrentDialog>,
 ) {
     let quad = meshes.add(shape::Quad::new(Vec2::splat(1.0)).into());
     let quad_collider = Collider::cuboid(0.5, 0.5);
     let wall_rigidbody = RigidBody::Fixed;
-    let wall_material = materials.add(ColorMaterial::from(Color::rgb(0.9, 0.9, 0.9)));
-    let image = asset_server.load("background.png");
+    let wall_material = forcefield_materials.add(ForceFieldMaterial {
+        color: Color::PURPLE,
+        ..Default::default()
+    });
+    let image = asset_server.load("texture/background.png");
     commands
         .spawn(SpatialBundle::from_transform(Transform::from_scale(
             Vec3::splat(0.01),
@@ -144,11 +164,11 @@ fn setup(
                     z: 0.0,
                 },
                 scale: Vec3 {
-                    x: 1.0,
-                    y: 102.0,
+                    x: 102.0,
+                    y: 1.0,
                     z: 1.0,
                 },
-                ..Default::default()
+                rotation: Quat::from_rotation_z(PI / 2.0),
             },
             mesh: quad.clone().into(),
             material: wall_material.clone(),
@@ -165,11 +185,11 @@ fn setup(
                     z: 0.0,
                 },
                 scale: Vec3 {
-                    x: 1.0,
-                    y: 102.0,
+                    x: 102.0,
+                    y: 1.0,
                     z: 1.0,
                 },
-                ..Default::default()
+                rotation: Quat::from_rotation_z(PI / 2.0),
             },
             mesh: quad.clone().into(),
             material: wall_material.clone(),
@@ -193,30 +213,57 @@ fn setup(
         })
         .insert((quad_collider.clone(), wall_rigidbody));
     commands
-        .spawn(PlayerBundle::new(asset_server.load("player.png")))
+        .spawn(PlayerBundle::new(asset_server.load("texture/player.png")))
         .insert(ParalaxTarget);
 }
 
 const RCS_FORCE: f32 = 0.5;
-const RCS_TORQUE: f32 = 0.03;
+const RCS_TORQUE: f32 = 0.08;
+
+fn launch_dialog(
+    mut events: EventReader<GamepadButtonChangedEvent>,
+    mut current_dialog: ResMut<CurrentDialog>,
+    mut state: ResMut<NextState<AppState>>,
+) {
+    for event in events.read() {
+        match event {
+            GamepadButtonChangedEvent {
+                button_type: GamepadButtonType::North,
+                value,
+                ..
+            } if *value > 0.5 => {
+                current_dialog.set(Dialog::Test);
+                state.set(AppState::InDialog);
+            }
+            _ => {}
+        }
+    }
+}
 
 fn player_movement(
     time: Res<Time>,
     gamepads: Res<Gamepads>,
     buttons: Res<Input<GamepadButton>>,
     axes: Res<Axis<GamepadAxis>>,
-    mut player: Query<(&mut ExternalImpulse, &mut Velocity), With<PlayerTag>>,
+    mut player: Query<(&mut ExternalImpulse, &mut Velocity, &GlobalTransform), With<PlayerTag>>,
+    state: Res<State<AppState>>,
 ) {
+    let (mut impulse, mut current_velocity, transform) = player.single_mut();
+    if *state == AppState::InDialog {
+        stop_player(&mut current_velocity, &mut impulse, &time);
+        return;
+    }
+
     for gamepad in gamepads.iter().take(1) {
         let stop_button = GamepadButton {
             gamepad,
             button_type: GamepadButtonType::South,
         };
-        let mut left_stick_x = axes
-            .get(GamepadAxis::new(gamepad, GamepadAxisType::LeftStickX))
+        let mut right_stick_x = axes
+            .get(GamepadAxis::new(gamepad, GamepadAxisType::RightStickX))
             .unwrap();
-        if left_stick_x.abs() < 0.2 {
-            left_stick_x = 0.0;
+        if right_stick_x.abs() < 0.2 {
+            right_stick_x = 0.0;
         }
         let mut left_stick_y = axes
             .get(GamepadAxis::new(gamepad, GamepadAxisType::LeftStickY))
@@ -225,36 +272,30 @@ fn player_movement(
             left_stick_y = 0.0;
         }
 
-        let mut right_stick_x = axes
-            .get(GamepadAxis::new(gamepad, GamepadAxisType::RightStickX))
-            .unwrap();
-
-        if right_stick_x.abs() < 0.2 {
-            right_stick_x = 0.0;
-        }
-
-        let (mut impulse, mut current_velocity) = player.single_mut();
-
         if buttons.pressed(stop_button) {
-            if current_velocity.linvel.length() > 0.5 {
-                impulse.impulse = -current_velocity.linvel.normalize() * RCS_FORCE * 2.0 * time.delta_seconds();
-            } else {
-                current_velocity.linvel = Vec2::splat(0.0);
-            }
-
-            if current_velocity.angvel.abs() > 0.1 {
-                impulse.torque_impulse = -current_velocity.angvel.signum() * RCS_TORQUE * 2.0 * time.delta_seconds();
-            } else {
-                current_velocity.angvel = 0.0;
-            }
-
+            stop_player(&mut current_velocity, &mut impulse, &time)
         } else {
-            let left_stick = Vec2::new(left_stick_x, left_stick_y);
-            let force = left_stick * RCS_FORCE;
+            let force = transform.up().truncate() * left_stick_y * RCS_FORCE;
             let torque = -right_stick_x * RCS_TORQUE;
 
             impulse.impulse += force * time.delta_seconds();
             impulse.torque_impulse += torque * time.delta_seconds();
         }
+    }
+}
+
+fn stop_player(current_velocity: &mut Velocity, impulse: &mut ExternalImpulse, time: &Time) {
+    if current_velocity.linvel.length() > 0.5 {
+        impulse.impulse =
+            -current_velocity.linvel.normalize() * RCS_FORCE * 2.0 * time.delta_seconds();
+    } else {
+        current_velocity.linvel = Vec2::splat(0.0);
+    }
+
+    if current_velocity.angvel.abs() > 0.1 {
+        impulse.torque_impulse =
+            -current_velocity.angvel.signum() * RCS_TORQUE * 2.0 * time.delta_seconds();
+    } else {
+        current_velocity.angvel = 0.0;
     }
 }

@@ -12,6 +12,9 @@ bevy-scene-hook = "9.0.0"
 bevy_gltf_components = "0.1.3"
 bevy_hanabi = { git = "https://github.com/djeedai/bevy_hanabi.git", default-features = false, features = ["2d", "gpu_tests"] }
 bevy_rapier2d = {path = "../bevy_rapier/bevy_rapier2d"}
+serde = {version = "1", features = ["derive"]}
+ron = "0.8"
+thiserror = "*"
 
 [profile.dev]
 opt-level = 1

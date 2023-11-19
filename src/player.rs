@@ -29,7 +29,7 @@ impl PlayerBundle {
 
         let damping = Damping {
             linear_damping: 0.0,
-            angular_damping: 0.0,
+            angular_damping: 1.0,
         };
 
         Self {

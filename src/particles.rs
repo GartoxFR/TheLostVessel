@@ -28,20 +28,25 @@ fn setup_particle_effect(
     asset_server: Res<AssetServer>,
     mut effects: ResMut<Assets<EffectAsset>>,
 ) {
-    let particle_texture = asset_server.load("cloud.png");
+    let particle_texture = asset_server.load("texture/cloud.png");
     let spawner = Spawner::rate(400.0.into());
     let mut gradient = Gradient::default();
-    gradient.add_key(0.0, Vec4::splat(1.));
+    gradient.add_key(0.0, Vec4::splat(0.6));
+    gradient.add_key(0.2, Vec4::splat(0.2));
     gradient.add_key(1.0, Vec4::splat(0.0));
 
     let writer = ExprWriter::new();
     let age = writer.lit(0.0).expr();
+    let direction = writer.prop("direction");
+    let parent_velocity = writer.prop("parent_velocity");
+
     let init_age = SetAttributeModifier::new(Attribute::AGE, age);
 
     let lifetime = writer.lit(0.2).expr();
     let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
 
     let init_pos = SetPositionCircleModifier {
+        // center: (writer.lit(-1.0) * parent_velocity.clone()).expr(),
         center: writer.lit(Vec3::ZERO).expr(),
         axis: writer.lit(Vec3::Z).expr(),
         radius: writer.lit(0.1).expr(),
@@ -51,13 +56,11 @@ fn setup_particle_effect(
     let drag = writer.lit(2.).expr();
     let update_drag = LinearDragModifier::new(drag);
 
-    let direction = writer.prop("direction");
-    // let parent_velocity = writer.prop("parent_velocity");
     let ortho = writer.lit(Vec3::Z).cross(direction.clone());
     let spread = writer.rand(ScalarType::Float) * writer.lit(2.) - writer.lit(1.);
-    let speed = writer.lit(2.0);
+    let speed = writer.lit(3.0);
     let velocity =
-        /* parent_velocity + */ (direction + ortho * spread * writer.lit(0.7)).normalized() * speed;
+        parent_velocity + (direction + ortho * spread * writer.lit(0.3)).normalized() * speed;
     let init_vel = SetAttributeModifier::new(Attribute::VELOCITY, (velocity).expr());
     let effect = effects.add(
         EffectAsset::new(32768, spawner, writer.finish())
@@ -84,13 +87,13 @@ fn setup_particle_effect(
         player
             .spawn(ParticleEffectBundle::new(effect.clone()).with_spawner(spawner))
             .insert(TransformBundle::from_transform(Transform::from_xyz(
-                -350., -275., 0.,
+                -310., -250., 0.,
             )))
             .insert(RightRCS);
         player
             .spawn(ParticleEffectBundle::new(effect).with_spawner(spawner))
             .insert(TransformBundle::from_transform(Transform::from_xyz(
-                350., -275., 0.,
+                310., -250., 0.,
             )))
             .insert(LeftRCS);
     });
