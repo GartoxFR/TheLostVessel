@@ -1,0 +1,4 @@
+(lines: [
+    (AI, "AI", "Interesting.. This plant has a similar energy signature as these lights on the wall."),
+    (Player, "You", "Maybe it's one of their power sources."),
+])

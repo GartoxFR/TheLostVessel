@@ -16,7 +16,8 @@ pub fn paralax_movement(
     match target.get_single() {
         Ok(target_transform) => {
             for (mut transform, ParalaxBackground { paralax_factor }) in background.iter_mut()  {
-                transform.translation = target_transform.translation * *paralax_factor
+                transform.translation.x = target_transform.translation.x * *paralax_factor;
+                transform.translation.y = target_transform.translation.y * *paralax_factor;
             }
         }
         Err(QuerySingleError::MultipleEntities(..)) => {

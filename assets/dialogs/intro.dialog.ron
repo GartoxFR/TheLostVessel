@@ -1,0 +1,16 @@
+(lines: [
+    (AI, "AI", "Please, wake up !"),
+    (Player, "You", "..."),
+    (AI, "AI", "Are you ok ?"),
+    (Player, "You", "I guess so...\n\nWhere am I ?"),
+    (AI, "AI", "It seems like the energy of traversing this forcefield caused you to faint."),
+    (Player, "You", "Forcefield ? What are you talking about ?"),
+    (AI, "AI", "It probably made you lose some memory."),
+    (AI, "AI", "Two days ago, we discovered this vessel in earth orbit. We know nothing about it so you were engaged to invastigate."),
+    (AI, "AI", "You manage to go through the forcefield with the help of your capsule but you immediatly fainted."),
+    (Player, "You", "* You try reaching the control center with your radio but nobody answers *"),
+    (Player, "You", "The radio is broken ?"),
+    (AI, "AI", "The forcefield is blocking any communication. We are alone here."),
+    (Player, "You", "Did you find any way to out ?"),
+    (AI, "AI", "Negative. We will have to explore this ship to find our way out."),
+])

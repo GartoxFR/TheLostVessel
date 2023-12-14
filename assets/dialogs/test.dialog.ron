@@ -1,4 +1,0 @@
-(lines: [
-    (AI, "????", "Are you ok ?"),
-    (Player, "You", "I guess so...\n\nWhere am I ?"),
-])

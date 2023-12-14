@@ -1,4 +1,6 @@
 use bevy::input::gamepad::GamepadButtonChangedEvent;
+use bevy::input::keyboard::KeyboardInput;
+use bevy::input::ButtonState;
 use bevy::prelude::*;
 
 use crate::asset_enum::{AssetDictionary, AssetEnumPlugin};
@@ -54,7 +56,8 @@ impl Plugin for DialogPlugin {
                 (
                     update_dialog_text,
                     update_dialog_portrait,
-                    dialog_input.run_if(in_state(AppState::InDialog)),
+                    (dialog_controller_input, dialog_keyboard_input)
+                        .run_if(in_state(AppState::InDialog)),
                 ),
             );
     }
@@ -158,7 +161,7 @@ fn set_hidden<T: Component>(mut dialog_vibility: Query<&mut Visibility, With<T>>
     }
 }
 
-fn dialog_input(
+fn dialog_controller_input(
     mut current_dialog: ResMut<CurrentDialog>,
     mut events: EventReader<GamepadButtonChangedEvent>,
     mut state: ResMut<NextState<AppState>>,
@@ -203,6 +206,33 @@ fn update_dialog_text(
         {
             text_comp.sections[0].value = line.text.to_string();
             speaker_comp.sections[0].value = line.speaker.to_string();
+        }
+    }
+}
+
+fn dialog_keyboard_input(
+    mut current_dialog: ResMut<CurrentDialog>,
+    mut events: EventReader<KeyboardInput>,
+    mut state: ResMut<NextState<AppState>>,
+    dialog_dict: Res<AssetDictionary<Dialog, DialogAsset>>,
+    dialog_assets: Res<Assets<DialogAsset>>,
+) {
+    for event in events.read() {
+        if let KeyboardInput {
+            state: ButtonState::Pressed,
+            key_code: Some(KeyCode::Space),
+            ..
+        } = event
+        {
+            current_dialog.current_line += 1;
+            if current_dialog.current_line
+                >= dialog_dict
+                    .get(&current_dialog.dialog, &dialog_assets)
+                    .map(|dialog| dialog.lines.len())
+                    .unwrap_or(0)
+            {
+                state.set(AppState::InGame);
+            }
         }
     }
 }

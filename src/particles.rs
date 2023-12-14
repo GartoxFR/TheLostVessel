@@ -3,7 +3,7 @@ use bevy_hanabi::prelude::*;
 use bevy_rapier2d::prelude::*;
 
 use crate::player::PlayerTag;
-use crate::player_movement;
+use crate::old::player_movement;
 
 pub struct ParticlePlugin;
 

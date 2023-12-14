@@ -1,0 +1,6 @@
+(lines: [
+    (Player, "You", "There is children in this ship ?"),
+    (AI, "AI", "It's possible, we don't know how long it's been here."),
+    (AI, "AI", "Do you think they look like this toy ?"),
+    (Player, "You", "I don't know, it's possible."),
+])

@@ -1,30 +1,30 @@
+mod asset_enum;
 mod dialog;
 mod forcefield;
+pub mod objects;
+mod old;
 mod paralax;
 mod particles;
 mod player;
-mod asset_enum;
+mod tilemap;
 
-use std::f32::consts::PI;
-
-use bevy::input::gamepad::{GamepadButtonChangedEvent, GamepadEvent};
+use bevy::input::keyboard::KeyboardInput;
+use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy::render::camera::ScalingMode;
-use bevy::sprite::{Material2dPlugin, MaterialMesh2dBundle};
 use bevy::transform::TransformSystem;
 use bevy::window::WindowResolution;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_rapier2d::prelude::*;
-use bevy_scene_hook::*;
 
-use self::dialog::{CurrentDialog, DialogPlugin, Portrait, Dialog};
-use self::forcefield::{forcefield_update_time, ForceFieldMaterial};
+use self::dialog::{CurrentDialog, Dialog, DialogPlugin};
+use self::objects::ObjectsPlugin;
 use self::paralax::{paralax_movement, ParalaxBackground, ParalaxTarget};
-use self::particles::ParticlePlugin;
 use self::player::{PlayerBundle, PlayerTag};
+use self::tilemap::spawn_map;
 
 #[derive(Debug, States, Default, Clone, Copy, Eq, PartialEq, Hash)]
-enum AppState {
+pub enum AppState {
     #[default]
     InGame,
     InDialog,
@@ -32,79 +32,58 @@ enum AppState {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                resolution: WindowResolution::new(1280.0, 720.0),
-                resizable: false,
-                // present_mode: PresentMode::Immediate,
-                ..Default::default()
-            }),
-            ..Default::default()
-        }))
-        .register_type::<ParalaxBackground>()
-        .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(1.0))
-        .add_plugins(WorldInspectorPlugin::default())
-        .add_plugins(Material2dPlugin::<ForceFieldMaterial>::default())
-        // .add_plugins(RapierDebugRenderPlugin::default())
-        .add_plugins(ParticlePlugin)
-        .add_plugins(HookPlugin)
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        resolution: WindowResolution::new(1280.0, 720.0),
+                        // present_mode: PresentMode::Immediate,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .set(ImagePlugin::default_nearest()),
+        )
+        .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(16.0))
+        // .add_plugins(WorldInspectorPlugin::default())
+        .add_plugins(RapierDebugRenderPlugin::default().disabled())
         .add_plugins(DialogPlugin)
+        .add_plugins(ObjectsPlugin)
         .add_state::<AppState>()
-        .insert_resource(RapierConfiguration {
-            gravity: Vec2::ZERO,
-            ..Default::default()
-        })
-        .add_systems(Startup, setup)
-        .add_systems(Update, (player_movement, launch_dialog))
-        .add_systems(Update, forcefield_update_time)
+        .add_event::<ResetEvent>()
+        .add_systems(Startup, (setup, spawn_map))
+        .add_systems(
+            Update,
+            (
+                (movement, reset).run_if(in_state(AppState::InGame)),
+                control_debug_renderer,
+            ),
+        )
         .add_systems(
             PostUpdate,
             paralax_movement
                 .after(PhysicsSet::Writeback)
                 .before(TransformSystem::TransformPropagate),
         )
+        .insert_resource(RapierConfiguration {
+            gravity: Vec2::ZERO,
+            ..Default::default()
+        })
         .run();
 }
 
-fn setup(
+pub fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut forcefield_materials: ResMut<Assets<ForceFieldMaterial>>,
-    mut dialog: ResMut<CurrentDialog>,
+    mut atlases: ResMut<Assets<TextureAtlas>>,
+    mut current_dialog: ResMut<CurrentDialog>,
+    mut state: ResMut<NextState<AppState>>,
 ) {
-    let quad = meshes.add(shape::Quad::new(Vec2::splat(1.0)).into());
-    let quad_collider = Collider::cuboid(0.5, 0.5);
-    let wall_rigidbody = RigidBody::Fixed;
-    let wall_material = forcefield_materials.add(ForceFieldMaterial {
-        color: Color::PURPLE,
-        ..Default::default()
-    });
-    let image = asset_server.load("texture/background.png");
-    commands
-        .spawn(SpatialBundle::from_transform(Transform::from_scale(
-            Vec3::splat(0.01),
-        )))
-        .with_children(|background| {
-            for (i, j) in [(-1.0, -1.0), (-1.0, 1.0), (1.0, -1.0), (1.0, 1.0)] {
-                background.spawn(SpriteBundle {
-                    texture: image.clone(),
-                    transform: Transform::from_xyz(512.0 * i, 512.0 * j, -10.0),
-                    ..Default::default()
-                });
-            }
-        })
-        .insert(ParalaxBackground {
-            paralax_factor: 0.95,
-        })
-        .insert(Name::new("Background"));
-
     commands
         .spawn(Camera2dBundle {
+            transform: Transform::from_translation(Vec3::new(200.0, -300.0, 10.0)),
             projection: OrthographicProjection {
-                scaling_mode: ScalingMode::WindowSize(100.0),
-                near: 10000.0,
-                far: -10000.0,
+                scaling_mode: ScalingMode::WindowSize(3.0),
                 ..Default::default()
             },
             ..Default::default()
@@ -112,190 +91,112 @@ fn setup(
         .insert(ParalaxBackground {
             paralax_factor: 1.0,
         });
+    let player_atlas = TextureAtlas::from_grid(
+        asset_server.load("texture/player.png"),
+        Vec2::splat(32.0),
+        4,
+        1,
+        None,
+        None,
+    );
+    let player_atlas = atlases.add(player_atlas);
+    commands
+        .spawn(PlayerBundle::new(
+            Transform::from_translation(Vec3::new(200.0, -300.0, 1.0)),
+            player_atlas,
+        ))
+        .insert(ParalaxTarget)
+        .with_children(|commands| {
+            commands.spawn((
+                SpatialBundle::from_transform(Transform::from_xyz(0.0, -9.5, 0.0)),
+                Collider::cuboid(6.5, 2.5),
+            ));
+        });
 
-    commands
-        .spawn(MaterialMesh2dBundle {
-            transform: Transform {
-                translation: Vec3 {
-                    x: 0.0,
-                    y: 50.0,
-                    z: 0.0,
-                },
-                scale: Vec3 {
-                    x: 102.0,
-                    y: 1.0,
-                    z: 1.0,
-                },
-                ..Default::default()
-            },
-            mesh: quad.clone().into(),
-            material: wall_material.clone(),
-            ..Default::default()
-        })
-        .insert((quad_collider.clone(), wall_rigidbody));
-
-    commands
-        .spawn(MaterialMesh2dBundle {
-            transform: Transform {
-                translation: Vec3 {
-                    x: 0.0,
-                    y: -50.0,
-                    z: 0.0,
-                },
-                scale: Vec3 {
-                    x: 102.0,
-                    y: 1.0,
-                    z: 1.0,
-                },
-                ..Default::default()
-            },
-            mesh: quad.clone().into(),
-            material: wall_material.clone(),
-            ..Default::default()
-        })
-        .insert((quad_collider.clone(), wall_rigidbody));
-
-    commands
-        .spawn(MaterialMesh2dBundle {
-            transform: Transform {
-                translation: Vec3 {
-                    x: 50.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                scale: Vec3 {
-                    x: 102.0,
-                    y: 1.0,
-                    z: 1.0,
-                },
-                rotation: Quat::from_rotation_z(PI / 2.0),
-            },
-            mesh: quad.clone().into(),
-            material: wall_material.clone(),
-            ..Default::default()
-        })
-        .insert((quad_collider.clone(), wall_rigidbody));
-
-    commands
-        .spawn(MaterialMesh2dBundle {
-            transform: Transform {
-                translation: Vec3 {
-                    x: -50.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                scale: Vec3 {
-                    x: 102.0,
-                    y: 1.0,
-                    z: 1.0,
-                },
-                rotation: Quat::from_rotation_z(PI / 2.0),
-            },
-            mesh: quad.clone().into(),
-            material: wall_material.clone(),
-            ..Default::default()
-        })
-        .insert((quad_collider.clone(), wall_rigidbody));
-
-    commands
-        .spawn(MaterialMesh2dBundle {
-            transform: Transform {
-                translation: Vec3 {
-                    x: -5.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                ..Default::default()
-            },
-            mesh: quad.clone().into(),
-            material: wall_material.clone(),
-            ..Default::default()
-        })
-        .insert((quad_collider.clone(), wall_rigidbody));
-    commands
-        .spawn(PlayerBundle::new(asset_server.load("texture/player.png")))
-        .insert(ParalaxTarget);
+    current_dialog.set(Dialog::Intro);
+    state.set(AppState::InDialog);
 }
 
-const RCS_FORCE: f32 = 0.5;
-const RCS_TORQUE: f32 = 0.08;
+const RCS_FORCE: f32 = 100.0;
 
-fn launch_dialog(
-    mut events: EventReader<GamepadButtonChangedEvent>,
+pub fn movement(
+    time: Res<Time>,
+    mut player_impulse: Query<(&mut ExternalImpulse, &mut TextureAtlasSprite), With<PlayerTag>>,
+    inputs: Res<Input<KeyCode>>,
+) {
+    let (mut impulse, mut sprite) = player_impulse.single_mut();
+
+    let mut add_impulse = Vec2::default();
+
+    if inputs.pressed(KeyCode::S) {
+        add_impulse.y -= 1.0;
+        sprite.index = 0;
+    }
+
+    if inputs.pressed(KeyCode::W) {
+        add_impulse.y += 1.0;
+        sprite.index = 2;
+    }
+
+    if inputs.pressed(KeyCode::A) {
+        add_impulse.x -= 1.0;
+        sprite.index = 3;
+    }
+
+    if inputs.pressed(KeyCode::D) {
+        add_impulse.x += 1.0;
+        sprite.index = 1;
+    }
+
+    if add_impulse != Vec2::default() {
+        impulse.impulse += add_impulse.normalize() * RCS_FORCE * time.delta_seconds();
+    }
+}
+
+pub fn control_debug_renderer(
+    mut events: EventReader<KeyboardInput>,
+    mut debug_render_context: ResMut<DebugRenderContext>,
+) {
+    for _ in events.read().filter(|input| {
+        matches!(
+            input,
+            KeyboardInput {
+                state: ButtonState::Pressed,
+                key_code: Some(KeyCode::F1),
+                ..
+            }
+        )
+    }) {
+        debug_render_context.enabled = !debug_render_context.enabled;
+    }
+}
+
+#[derive(Debug, Default, Event)]
+pub struct ResetEvent;
+
+pub fn reset(
+    mut events: EventReader<KeyboardInput>,
+    mut player: Query<(&mut Transform, &mut Velocity), With<PlayerTag>>,
     mut current_dialog: ResMut<CurrentDialog>,
     mut state: ResMut<NextState<AppState>>,
+    mut event: EventWriter<ResetEvent>,
 ) {
-    for event in events.read() {
-        match event {
-            GamepadButtonChangedEvent {
-                button_type: GamepadButtonType::North,
-                value,
+    for _ in events.read().filter(|input| {
+        matches!(
+            input,
+            KeyboardInput {
+                state: ButtonState::Pressed,
+                key_code: Some(KeyCode::R),
                 ..
-            } if *value > 0.5 => {
-                current_dialog.set(Dialog::Test);
-                state.set(AppState::InDialog);
             }
-            _ => {}
-        }
-    }
-}
+        )
+    }) {
+        let (mut transform, mut velocity) = player.single_mut();
+        *transform = Transform::from_translation(Vec3::new(200.0, -300.0, 1.0));
+        *velocity = Default::default();
 
-fn player_movement(
-    time: Res<Time>,
-    gamepads: Res<Gamepads>,
-    buttons: Res<Input<GamepadButton>>,
-    axes: Res<Axis<GamepadAxis>>,
-    mut player: Query<(&mut ExternalImpulse, &mut Velocity, &GlobalTransform), With<PlayerTag>>,
-    state: Res<State<AppState>>,
-) {
-    let (mut impulse, mut current_velocity, transform) = player.single_mut();
-    if *state == AppState::InDialog {
-        stop_player(&mut current_velocity, &mut impulse, &time);
-        return;
-    }
-
-    for gamepad in gamepads.iter().take(1) {
-        let stop_button = GamepadButton {
-            gamepad,
-            button_type: GamepadButtonType::South,
-        };
-        let mut right_stick_x = axes
-            .get(GamepadAxis::new(gamepad, GamepadAxisType::RightStickX))
-            .unwrap();
-        if right_stick_x.abs() < 0.2 {
-            right_stick_x = 0.0;
-        }
-        let mut left_stick_y = axes
-            .get(GamepadAxis::new(gamepad, GamepadAxisType::LeftStickY))
-            .unwrap();
-        if left_stick_y.abs() < 0.2 {
-            left_stick_y = 0.0;
-        }
-
-        if buttons.pressed(stop_button) {
-            stop_player(&mut current_velocity, &mut impulse, &time)
-        } else {
-            let force = transform.up().truncate() * left_stick_y * RCS_FORCE;
-            let torque = -right_stick_x * RCS_TORQUE;
-
-            impulse.impulse += force * time.delta_seconds();
-            impulse.torque_impulse += torque * time.delta_seconds();
-        }
-    }
-}
-
-fn stop_player(current_velocity: &mut Velocity, impulse: &mut ExternalImpulse, time: &Time) {
-    if current_velocity.linvel.length() > 0.5 {
-        impulse.impulse =
-            -current_velocity.linvel.normalize() * RCS_FORCE * 2.0 * time.delta_seconds();
-    } else {
-        current_velocity.linvel = Vec2::splat(0.0);
-    }
-
-    if current_velocity.angvel.abs() > 0.1 {
-        impulse.torque_impulse =
-            -current_velocity.angvel.signum() * RCS_TORQUE * 2.0 * time.delta_seconds();
-    } else {
-        current_velocity.angvel = 0.0;
+        current_dialog.set(Dialog::Intro);
+        state.set(AppState::InDialog);
+        event.send_default();
     }
 }
